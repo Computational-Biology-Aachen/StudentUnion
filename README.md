@@ -102,3 +102,14 @@ Each week you will be assigned to one of the students branches and their pull-re
 5. Can you rewrite the code to be cleaner?
    
 To make the reviewing process more fun, we have created a bingo card, that is randomized for each reviewer. If you get a bingo (5 in a row horizontally, vertically or diagonally) the author of the code will have to bring cake next week.
+
+### Bingo
+
+To get Bingo to run, you have to have [npm](https://docs.npmjs.com/downloading-and-installing-node-js-and-npm) installed. You then have to run the following code inside of this directory:
+
+```bash
+npm install
+npm run dev
+```
+
+This will create a localhost of a bingo card, that is set to to the Week of the year. This means that everyone that acesses this bingo card in the same week, will get the same. If you have a bingo, please take a screenshot and add it to your pull request review.
