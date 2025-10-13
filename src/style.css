@@ -1,0 +1,106 @@
+body {
+    font-family: 'Roboto Mono', monospace;
+    background-color: #f4f7f9;
+    color: #333;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh; /* Ensures body is AT LEAST window height */
+    margin: 0;
+    padding: 20px;
+    box-sizing: border-box;
+}
+
+.container {
+    text-align: center;
+    background-color: #ffffff;
+    padding: 30px;
+    border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+}
+
+h1 {
+    color: #2c3e50;
+    margin-bottom: 10px;
+}
+
+p {
+    color: #7f8c8d;
+    margin-bottom: 25px;
+}
+
+#bingo-board {
+    border-collapse: collapse;
+    margin: 0 auto;
+}
+
+/* --- KEY CHANGES ARE HERE --- */
+th, td {
+    border: 2px solid #bdc3c7;
+    /* Use viewport units for responsive sizing */
+    width: 18vh; 
+    height: 18vh;
+    max-width: 140px;  /* Set a max size for large screens */
+    max-height: 140px; /* Set a max size for large screens */
+    padding: 8px;
+    text-align: center;
+    vertical-align: middle;
+    font-size: 14px;
+    transition: background-color 0.3s ease, color 0.3s ease, transform 0.2s ease;
+}
+
+th {
+    background-color: #3498db;
+    color: white;
+    font-size: 24px;
+    font-weight: bold;
+}
+
+td {
+    background-color: #ecf0f1;
+    cursor: pointer;
+}
+
+td:hover {
+    background-color: #dfe6e9;
+    transform: scale(1.05);
+}
+
+td.marked {
+    background-color: #27ae60;
+    color: white;
+    text-decoration: line-through;
+    font-weight: bold;
+    transform: scale(1);
+}
+
+#reset-button {
+    margin-top: 25px;
+    padding: 12px 25px;
+    font-size: 16px;
+    font-family: 'Roboto Mono', monospace;
+    color: white;
+    background-color: #e74c3c;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+
+#reset-button:hover {
+    background-color: #c0392b;
+}
+
+/* ADD THESE STYLES AT THE END */
+.week-display-container {
+    margin-top: 20px;
+}
+
+#week-display-text {
+    font-family: 'Roboto Mono', monospace;
+    padding: 10px 15px;
+    border-radius: 6px;
+    background-color: #ecf0f1;
+    color: #7f8c8d;
+    display: inline-block;
+}
