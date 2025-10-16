@@ -4,7 +4,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import mxlbricks.names as n
-import neonUtilities as nu
+import neonutilities as nu
 import numpy as np
 import pandas as pd
 from matplotlib.lines import Line2D
@@ -484,7 +484,7 @@ def calc_pam_vals(
     fluo_result: pd.Series, peak_distance: float = 120
 ) -> tuple[pd.Series, pd.Series, pd.Series, pd.DataFrame]:
     """Calculate PAM values from fluorescence data.
-    
+
     Use the fluorescence data from a PAM protocol to calculate Fm, NPQ, Fmin, and the quantum yields Y(NO), Y(NPQ) and Y(II). To find the Fm values, the peaks in the fluorescence data are found using scipy.signal.find_peaks. The distance between the peaks should be the same length as a period used in the PAM protocol, however may need to be adjusted based on the fluorescence data. Bets to plot the Flourescence data and the calculated Fm to check if the peaks are found correctly.
 
     Args:
@@ -497,14 +497,17 @@ def calc_pam_vals(
         Fmin (pd.Series): Minimum fluorescence values
         quant_yields (pd.DataFrame): Quantum yields (Y(NO), Y(NPQ), Y(II))
     """
+
     # Find the indices of the Flourescence peaks (Fmaxs)
     peaks, _ = find_peaks(fluo_result, distance=peak_distance, height=0)
 
     # Fm series
     Fm = fluo_result.iloc[peaks]
+    Fm.name = "Flourescence Peaks (Fm)"
 
     # Calculate NPQ
-    NPQ = (Fm.iloc[0] - Fm) / Fm
+    NPQ = (Fm.iloc[0] - Fm) / Fm if len(Fm) > 0 else pd.Series(dtype=float)
+    NPQ.name = "Non-Photochemical Quenching (NPQ)"
 
     # Find the minima around the peaks
     prominences, prominences_left, prominences_right = peak_prominences(
@@ -513,17 +516,20 @@ def calc_pam_vals(
 
     # Fmin is always the minima before the peak
     Fmin = fluo_result.iloc[prominences_left]
+    Fmin.name = "Minimum Fluorescence before peaks (Fmin)"
 
     # Quantum Yield of Non-Regulated Energy Loss (Y(NO))
-    Y_NO = Fmin / Fm.iloc[0]
+    Y_NO = Fmin / Fm.iloc[0] if len(Fm) > 0 else pd.Series(dtype=float)
     Y_NO.name = "Y(NO)"
 
     # Quantum Yield of Regulated Heat Dissipation (Y(NPQ))
-    Y_NPQ = Fmin / Fm.values - Fmin / Fm.iloc[0]
+    Y_NPQ = (
+        Fmin / Fm.values - Fmin / Fm.iloc[0] if len(Fm) > 0 else pd.Series(dtype=float)
+    )
     Y_NPQ.name = "Y(NPQ)"
 
     # Quantum Yield of Photochemical Energy Conversion (Y(II))
-    Y_II = (Fm.values - Fmin) / Fm.values
+    Y_II = (Fm.values - Fmin) / Fm.values if len(Fm) > 0 else pd.Series(dtype=float)
     Y_II.name = "Y(II)"
 
     # pd.DataFrame of the three quantum yields
@@ -537,33 +543,56 @@ def create_pam_fig(
     model: Model,
     pfd: str,
     flourescence: str,
-):
+) -> tuple[plt.Figure, tuple[plt.Axes, plt.Axes]]:
+    """Create a PAM figure from a MxLpy model.
+
+    Use a MxLpy model to simulate a PAM protocol and create a figure with the fluorescence data and the calculated quantum yields. The figure consists of two subplots, the first subplot shows the fluorescence data with the Fm and Fmin points, as well as the PAM protocol shading. The second subplot shows the quantum yields as a stackplot.
+
+    Args:
+        model (Model): An MxLpy model to simulate the PAM protocol with.
+        pfd (str): The name of PPFD parameter in the mxlpy model.
+        flourescence (str): The name of the fluorescence variable in the mxlpy model.
+
+    Returns:
+        tuple[plt.Figure, tuple[plt.Axes, plt.Axes]]: A tuple containing the figure and the axes.
+    """
+
+    # Make pam protocol for mxlpy simulation
     pam_prtc, shading = make_pam_protocol(pfd=pfd)
 
+    # Create PAM simulator
     pam_sim = Simulator(model=model)
 
+    # Simulate plant dark adaptation for 30 min
     pam_sim.update_parameter(pfd, 40)
-
     dark_adaptation_time = 30 * 60
-
     pam_sim.simulate(dark_adaptation_time)
+
+    # Simulate pam protocol
     pam_sim.simulate_protocol(pam_prtc, time_points_per_step=100)
+    if pam_sim.get_result() is not None:
+        variables, fluxes = pam_sim.get_result()
+        # Remove dark adaptation time from results
+        variables.index = variables.index - dark_adaptation_time
+        # Normalize fluorescence data to max value and remove negative time values
+        fluo_res = variables[flourescence] / max(variables[flourescence])
+        fluo_res = fluo_res.iloc[fluo_res.index >= 0]
+    else:
+        fluo_res = pd.Series()
 
-    variables, fluxes = pam_sim.get_result()
-    variables.index = variables.index - dark_adaptation_time
-    fluo_res = variables[flourescence] / max(variables[flourescence])
-    fluo_res = fluo_res.iloc[fluo_res.index >= 0]
-
-    Fm, Fm_light, NPQ, Fo, QY_PSII, quant_yields, Fmin_light = calc_npq(fluo_res)
+    # Calculate PAM values
+    Fm, NPQ, Fmin, quant_yields = calc_pam_vals(fluo_res)
 
     fig, (ax1, ax2) = plt.subplots(ncols=2, figsize=(15, 5))
 
+    # Plot fluorescence data and Fm and Fmin points
+    # TODO: Add Legend and axis labels
     ax1.plot(fluo_res, color="#ff8c00", lw=2)
     ax1.plot(Fm, color="#ff0000", lw=0, marker="x")
-    ax1.plot(Fm_light, color="yellow", lw=0, marker="x")
-    ax1.plot(Fo, color="green", lw=0, marker="^")
+    ax1.plot(Fmin, color="green", lw=0, marker="^")
     plot.shade_protocol(shading[pfd], ax=ax1, add_legend=False, alpha=0.1)
 
+    # Plot quantum yields as stackplot
     ax2.stackplot(
         quant_yields.index,
         quant_yields["Y(NO)"],
@@ -573,22 +602,27 @@ def create_pam_fig(
         baseline="zero",
     )
 
+    # Set axis limits and ticks to minutes
+    for ax in [ax1, ax2]:
+        ax.set_ylim(0, 1.1)
+        ax.set_xlim(0, max(fluo_res.index))
+        ax.set_xlabel("Time [min]")
+        xticks = [0, 4 * 60, 24 * 60, 44 * 60]
+        ax.set_xticks(xticks, labels=[str(x / 60) for x in xticks])
+
+    # Create PAM protocol shading above fluorescence plot
     width = 1 / len(shading)
-    x_position = 0
-    patches = None
+    x_position = 0.0
+    patches: list[Rectangle] = []
     patches_color = []
     rect_height = 0.05
     rect_y = 1.01
 
-    for ax in [ax1, ax2]:
-        ax.set_ylim(0, 1.1)
-        ax.set_xlim(0, max(fluo_res.index))
-        xticks = [0, 4 * 60, 24 * 60, 44 * 60]
-        ax.set_xticks(xticks, labels=[str(x / 60) for x in xticks])
-
+    # Iterate through shading protocol and create rectangles
     for index, val in shading.iterrows():
         color = val["Color"]
 
+        # Create rectangle based on color of row in shading protocol
         rect = Rectangle(
             (x_position, rect_y),
             width,
@@ -601,31 +635,39 @@ def create_pam_fig(
             lw=0.5,
         )
 
-        if patches is not None and patches[-1].get_facecolor() == rect.get_facecolor():
+        # If patches list empty add first rectangle
+        if patches == []:
+            patches.append(rect)
+            patches_color.append(color)
+        # If the last rectangle has the same color, extend its width instead of adding a new one
+        elif patches[-1].get_facecolor() == rect.get_facecolor():
             patches[-1].set_width(patches[-1].get_width() + width)
-        elif patches is None:
-            patches = [rect]
-            patches_color = [color]
+        # Else add new rectangle
         else:
             patches.append(rect)
             patches_color.append(color)
 
         x_position += width
 
+    # Add rectangles to plot and add PPFD values as text
     for patch, color in zip(patches, patches_color):
         ax1.add_patch(patch)
 
+        # Skip first patch as it is only a small slither due to the way the rectangles are created
         if patches.index(patch) == 0:
             continue
 
+        # Get associated PPFD value from shading protocol
         val_associated = shading[shading["Color"] == color][pfd].iloc[0]
 
+        # Choose text color based on rectangle color
         if color == "black":
             text_color = "white"
         else:
             text_color = "black"
 
-        text = ax1.text(
+        # Add text to center of rectangle
+        ax1.text(
             patch.get_center()[0],
             patch.get_center()[1],
             str(val_associated) + r" $\mathbf{\mathrm{\mu mol\ m^{-2}\ s^{-1}}}$",
@@ -636,16 +678,14 @@ def create_pam_fig(
             fontweight="bold",
         )
 
-    # ax2.plot(quant_yields.index, quant_yields["Y(NO)"], color="#c9303e", lw=2, label=r"$\mathbf{Y(NO)}$", marker="x")
-    # ax2.plot(quant_yields.index, quant_yields["Y(NPQ)"], color="#ffbf6e", lw=2, label=r"$\mathbf{Y(NPQ)}$", marker="x")
-    # ax2.plot(quant_yields.index, quant_yields["Y(II)"], color="#56aa69", lw=2, label=r"$\mathbf{Y(II)}$", marker="x")
-
+    # Create quantum yield legend above stackplot
     x_position = 0
 
     for color, label in zip(
         ["#c9303e", "#ffbf6e", "#56aa69"],
         [r"$\mathbf{Y(NO)}$", r"$\mathbf{Y(NPQ)}$", r"$\mathbf{Y(II)}$"],
     ):
+        # Create rectangle for legend with 1/3 width of the plot
         rect = Rectangle(
             (x_position, rect_y),
             1 / 3,
@@ -680,7 +720,27 @@ def create_day_simulation_fig(
     atp: str | None = None,
     nadph: str | None = None,
     flourescence: str | None = None,
-):
+) -> tuple[plt.Figure, plt.Axes]:
+    """Create a day simulation figure.
+
+    Create a day simulation figure using a MxLpy model and PAR data from NEON (https://www.neonscience.org/). The figure consists of the PAR data as a filled area plot and the model results as line plots. The model results can include the Rubisco carboxylation rate, the ATP/NADPH ratio, and the fluorescence. If the model does not contain the variables, they will not be plotted and "n.a." will be written as the y-axis label.
+
+    Args:
+        model (Model): MxLpy model to simulate day with
+        pfd (str): Name of the PPFD parameter in the MxLpy model
+        vc (str | None, optional): Name of the Rubisco carboxylase activity rate in the MxLpy model. Defaults to None.
+        atp (str | None, optional): Name of the ATP variable in the MxLpy model. Defaults to None.
+        nadph (str | None, optional): Name of the NADPH variable in the MxLpy model. Defaults to None.
+        flourescence (str | None, optional): Name of the fluorescence variable in the MxLpy model. Defaults to None.
+
+    Returns:
+        tuple[plt.Figure, plt.Axes]: Figure and axis of the day simulation plot
+    """
+    
+    # TODO: Check for case if result = None
+    # TODO: Seperate Simulation results to check if given name is in variables or fluxes or parameters or readouts or surrogates
+    
+    # Load PAR data from NEON at the KONZ site in June 2023 (https://data.neonscience.org/data-products/DP1.00024.001/RELEASE-2023)
     par_data = nu.load_by_product(
         dpid="DP1.00024.001",
         site="KONZ",
@@ -690,45 +750,74 @@ def create_day_simulation_fig(
         check_size=False,
         progress=False,
     )
+
+    # Select PAR Data per minute
     par_data = par_data["PARPAR_1min"]
+    # Set startDateTime as index and drop columns with all NaN values
     par_data = par_data.set_index("startDateTime")
     par_data = par_data.dropna(axis=1, how="all")
+    # Locate Date at 19.06
     day_data = par_data.loc["2023-06-19"]
+    # Use only the same position values
     day_data = day_data[day_data["horizontalPosition"] == "000"]
     day_data = day_data[day_data["verticalPosition"] == "010"]
+    # Limit data to between 12:00 and 23:59 # TODO: Only want day, which is good, but not realistic with hours set. Is data maybe skewed?
     day_data = day_data.between_time("12:00:00", "23:59:59")
 
     fig, ax = plt.subplots()
+    # Plot PAR data
     ax.fill_between(
         day_data.index, day_data["PARMean"], 0, alpha=0.3, color="black", lw=0
     )
 
+    # Format axis'
     ax.get_xaxis().set_major_formatter(plt.matplotlib.dates.DateFormatter("%H:%M"))
     ax.set_xlim(day_data.index[0], day_data.index[-1])
     ax.set_xlabel("Time [hh:mm]")
     ax.set_ylabel(r"PPFD [$\mathrm{\mu mol \, m^{-2} \, s^{-1}}$]")
 
+    # Create day simulation that folows the PAR data
     s = Simulator(model)
-
     day_prtc = make_protocol(
         [(60, {pfd: row["PARMean"]}) for index, row in day_data.iterrows()]
     )
-
     s.simulate_protocol(day_prtc)
 
-    variables, fluxes = s.get_result()
-    res = pd.concat([variables, fluxes], axis=1)
-    res.index = pd.to_datetime(res.index, unit="s", origin="2023-06-19 12:00:00")
+    # Get results and set index to datetime
+    res = s.get_result()
+    variables = res.get_variables()
+    variables.index = pd.to_datetime(variables.index, unit="s", origin="2023-06-19 12:00:00")
+    fluxes = res.get_fluxes()
+    fluxes.index = pd.to_datetime(fluxes.index, unit="s", origin="2023-06-19 12:00:00")
 
+    res_dict = {}
+    
+    for name, pointer in zip([vc, atp, nadph, flourescence], ["Vc", "ATP", "NADPH", "Fluorescence"]):
+        if name is None:
+            data = None
+            unit = None
+        elif name in variables.columns:
+            data = variables[name]
+            # unit = model._variables[name].unit Reimplement when sperated variables
+        elif name in fluxes.columns:
+            data = fluxes[name]
+            unit = model._reactions[name].unit
+        else:
+            data = model._parameters[name].value
+            unit = model._parameters[name].unit
+            
+        res_dict[pointer] = {"data": data, "unit": unit}
+    
+    # Colors of sim results
     vc_color = "#fa9442"
     atp_nadph_color = "#008aa1"
     fluo_color = "#1b3644"
     color_list = [vc_color, atp_nadph_color, fluo_color]
 
     axes_pos = 0.15
-
     yax_list = []
 
+    # Create twin axis for each variable to plot
     for ax_idx, color in enumerate(color_list):
         ax_new = ax.twinx()
         ax_new.spines["right"].set_color(color)
@@ -736,23 +825,24 @@ def create_day_simulation_fig(
         ax_new.tick_params(axis="y", colors=color)
         yax_list.append(ax_new)
 
+    # Plot variables if they are in the model else write n.a. as ylabel
     if vc is not None:
-        yax_list[0].plot(res[vc], color=vc_color)
+        yax_list[0].plot(res_dict["Vc"]["data"], color=vc_color)
         yax_list[0].set_ylabel(
-            rf"Rubisco Carboxylase Activity [${custom_latex(model.get_raw_reactions()[vc].unit)}$]",
+            rf"Rubisco Carboxylase Activity [${res_dict["Vc"]["unit"]}$]",
             color=vc_color,
         )
     else:
         yax_list[0].set_ylabel("Rubisco Carboxylase Activity n.a.", color=vc_color)
 
     if atp is not None and nadph is not None:
-        yax_list[1].plot(res[atp] / res[nadph], color=atp_nadph_color)
+        yax_list[1].plot(res_dict["ATP"]["data"] / res_dict["NADPH"]["data"], color=atp_nadph_color)
         yax_list[1].set_ylabel("ATP/NADPH", color=atp_nadph_color)
     else:
         yax_list[1].set_ylabel("ATP/NADPH n.a.", color=atp_nadph_color)
 
     if flourescence is not None:
-        yax_list[2].plot(res[flourescence], color=fluo_color)
+        yax_list[2].plot(res_dict["Fluorescence"]["data"], color=fluo_color)
         yax_list[2].set_ylabel("Fluorescence", color=fluo_color)
     else:
         yax_list[2].set_ylabel("Fluorescence n.a.", color=fluo_color)
@@ -767,19 +857,50 @@ def create_mca_fig(
     coeff_rubisco: str | None,
     rubp: str | None,
     co2: str | None,
-):
+) -> tuple[plt.Figure, plt.Axes]:
+    """Create curated MCA figure from MxLpy model.
+
+    Create a curated MCA figure from a MxLpy model using the response coefficients of several aspects of photosynthesis. If the model does not contain the given parameters or variables, they will not be plotted and the corresponding row/column will be faded out.
+
+    The chosen MCA will look like this:
+
+            | PSII | PSI | Rubisco |
+    RuBP    |
+    CO2     |
+
+    Args:
+        model (Model): MxLpy model to perform MCA on.
+        coeff_psii (str | None): Name of response coefficient for PSII in the MxLpy model.
+        coeff_psi (str | None): Name of PSI response coefficient in the MxLpy model.
+        coeff_rubisco (str | None): Name of Rubisco response coefficient in the MxLpy model.
+        rubp (str | None): Name of RuBP representation in the MxLpy model.
+        co2 (str | None): Name of CO2 representation in the MxLpy model.
+
+    Returns:
+        tuple[plt.Figure, plt.Axes]: Figure and Axes of the MCA plot.
+    """
+
+    # TODO Find other response coefficients to plot
+    # TODO Find other variables to plot
+    # TODO Do the same for fluxes
+
+    # Create list of parameters to scan if there are not None
     to_scan = [i for i in [coeff_psii, coeff_psi, coeff_rubisco] if i is not None]
 
+    # Do MCA of selected response coefficients
     variables, fluxes = mca.response_coefficients(
         model, to_scan=to_scan, disable_tqdm=True
     )
 
     fig, ax = plt.subplots()
 
+    # Point custom names to appropriate given response coefficients in MCA results
     plot_vars_columns = {"PSII": coeff_psii, "PSI": coeff_psi, "Rubisco": coeff_rubisco}
 
+    # Point custom names to appropriate given variables in MCA results
     plot_vars_index = {"RuBP": rubp, "CO2": co2}
 
+    # Get only the variables that are in the MCA results
     index_in_vars = [
         i for i in plot_vars_index.values() if i is not None and i in variables.index
     ]
@@ -789,13 +910,16 @@ def create_mca_fig(
         if i is not None and i in variables.columns
     ]
 
+    # Create copy of DataFrame to plot
     plot_vars = variables.loc[index_in_vars, columns_in_vars].copy()
 
+    # Rename rows and columns to custom names
     plot_vars = plot_vars.rename(
         columns={v: k for k, v in plot_vars_columns.items()},
         index={v: k for k, v in plot_vars_index.items()},
     )
 
+    # Add rows and columns with NaN values for variables not in MCA results
     for i in plot_vars_columns.keys():
         if i not in plot_vars.columns:
             plot_vars[i] = np.nan
@@ -804,13 +928,13 @@ def create_mca_fig(
         if i not in plot_vars.index:
             plot_vars.loc[i, :] = np.nan
 
-    print(plot_vars)
-
+    # Plot heatmap of MCA results
     plot.heatmap(
         plot_vars,
         ax=ax,
     )
 
+    # Set axis labels and if values are NaN set alpha of text to 0.3
     for text in ax.get_yticklabels():
         if plot_vars.loc[text.get_text(), :].isna().all():
             text.set_alpha(0.3)
@@ -828,7 +952,7 @@ def create_save_figs(
     file_prepend: str,
     co2: str | None,
     vc: str | None,
-    Ci: str | None,
+    pco2: str | None,
     H_cp_co2: str | None,
     gammastar: str | None,
     r_light: str | None,
@@ -840,10 +964,34 @@ def create_save_figs(
     coeff_psii: str | None,
     coeff_psi: str | None,
     coeff_rubisco: str | None,
-):
-    with tqdm(total=100) as pbar:
-        num_figs = 3
-        update_val = 100 / num_figs
+) -> None:
+    """Create and save all model validation figs.
+
+    Use a MxLpy model to create and save all model validation figs. The figs include:
+    - FvCB comparison fig
+    - PAM simulation fig
+    - Day simulation fig
+    - MCA of photosynthesis control coefficients fig
+
+    Args:
+        model (Model): MxLpy model to create figs from.
+        pfd (str): Name for PPFD parameter in model.
+        file_prepend (str): str of file prepend for each fig. Recommended to be the model name.
+        co2 (str | None): Name for CO2 variable in model.
+        vc (str | None): Name for rubisco carboxylation in model.
+        pco2 (str | None): Name for CO2 partial pressure in model.
+        H_cp_co2 (str | None): Name for Henry's law constant for CO2 in model.
+        gammastar (str | None): Name for CO2 compensation point in model.
+        r_light (str | None): Name for Rate of non-photorespiratory CO2 release in the light in model.
+        A (str | None): Name for net carbon assimilation rate in model.
+        flourescence (str | None): Name for fluorescence in model.
+        atp (str | None): Name for ATP in model.
+        nadph (str | None): Name for NADPH in model.
+        rubp (str | None): Name for RuBP in model.
+        coeff_psii (str | None): Name for PSII coefficient in model.
+        coeff_psi (str | None): Name for PSI coefficient in model.
+        coeff_rubisco (str | None): Name for Rubisco coefficient in model.
+    """
 
     # FvCB comparison
     plot, ax = create_fvcb_fig(
@@ -851,26 +999,23 @@ def create_save_figs(
         pfd=pfd,
         co2=co2,
         vc=vc,
-        pco2=Ci,
+        pco2=pco2,
         H_cp_co2=H_cp_co2,
         gammastar=gammastar,
         r_light=r_light,
         A=A,
     )
     plot.savefig(Path(__file__).parent / f"{file_prepend}_fvcb_compare.svg", dpi=300)
-    pbar.update(update_val)
 
     # PAM simulation
     pam_plot, ax = create_pam_fig(model=model, pfd=pfd, flourescence=flourescence)
     plt.savefig(Path(__file__).parent / f"{file_prepend}_pam.svg", dpi=300)
-    pbar.update(num_figs)
 
     # Day simulation
     plot, ax = create_day_simulation_fig(
         model=model, pfd=pfd, vc=vc, atp=atp, nadph=nadph, flourescence=flourescence
     )
     plot.savefig(Path(__file__).parent / f"{file_prepend}_day_simulation.svg", dpi=300)
-    pbar.update(num_figs)
 
     # MCA of photosynthesis control coefficients
     plot, ax = create_mca_fig(
@@ -891,7 +1036,7 @@ def create_report_summary(
     file_prepend: str,
     co2: str | None = None,
     vc: str | None = None,
-    Ci: str | None = None,
+    pco2: str | None = None,
     H_cp_co2: str | None = None,
     gammastar: str | None = None,
     r_light: str | None = None,
@@ -904,13 +1049,44 @@ def create_report_summary(
     coeff_psi: str | None = None,
     coeff_rubisco: str | None = None,
 ):
+    """Create markdown file of Model validation.
+
+    Use a MxLpy model to create and save all model validation figs and create a markdown summary file. The figs include:
+    - FvCB comparison fig
+    - PAM simulation fig
+
+    Args:
+        model (Model): MxLpy model to create figs from.
+        pfd (str): Name for PPFD parameter in model.
+        file_prepend (str): str of file prepend for each fig. Recommended to be the model name.
+        co2 (str | None, optional): Name for CO2 variable in model. Defaults to None.
+        vc (str | None, optional): Name for rubisco carboxylation in model. Defaults to None.
+        pco2 (str | None, optional): Name for CO2 partial pressure in model. Defaults to None.
+        H_cp_co2 (str | None, optional): Name for Henry's law constant for CO2 in model.. Defaults to None.
+        gammastar (str | None, optional): Name for CO2 compensation point in model. Defaults to None.
+        r_light (str | None, optional): Name for Rate of non-photorespiratory CO2 release in the light in model. Defaults to None.
+        A (str | None, optional): Name for net carbon assimilation rate in model. Defaults to None.
+        flourescence (str | None, optional): Name for fluorescence in model. Defaults to None.
+        atp (str | None, optional): Name for ATP in model. Defaults to None.
+        nadph (str | None, optional): Name for NADPH in model. Defaults to None.
+        rubp (str | None, optional): Name for RuBP in model. Defaults to None.
+        coeff_psii (str | None, optional): Name for PSII coefficient in model. Defaults to None.
+        coeff_psi (str | None, optional): Name for PSI coefficient in model. Defaults to None.
+        coeff_rubisco (str | None, optional): Name for Rubisco coefficient in model. Defaults to None.
+    """
+
+    # TODO: Add PAM assumptions
+    # TODO: Add Day simulation
+    # TODO: Add MCA
+
+    # Create all the validation figs and save them
     create_save_figs(
         model=model,
         pfd=pfd,
         file_prepend=file_prepend,
         co2=co2,
         vc=vc,
-        Ci=Ci,
+        pco2=pco2,
         H_cp_co2=H_cp_co2,
         gammastar=gammastar,
         r_light=r_light,
@@ -924,6 +1100,7 @@ def create_report_summary(
         coeff_rubisco=coeff_rubisco,
     )
 
+    # Create markdown summary file
     mdFile = MdUtils(
         file_name=f"{Path(__file__).parent / f'{file_prepend}_report_summary.md'}",
         title=f"{file_prepend} Report Summary",
@@ -933,6 +1110,7 @@ def create_report_summary(
     # Carbon Assimilation via FvCB
     mdFile.new_header(level=2, title="Carbon Assimilation via FvCB")
 
+    # Create table of parameters that are in the model
     table = ["Parameter", "Exists?"]
 
     for text, param in zip(
@@ -945,7 +1123,7 @@ def create_report_summary(
             r"$R_\mathrm{light}$",
             r"A",
         ],
-        [co2, vc, Ci, H_cp_co2, gammastar, r_light, A],
+        [co2, vc, pco2, H_cp_co2, gammastar, r_light, A],
     ):
         table.append(text)
         if param is None:
@@ -956,12 +1134,14 @@ def create_report_summary(
         else:
             table.append("&check;")
 
+    # Explanation of FvCB comparison
     mdFile.new_paragraph(
         r"Comparison of modelled carbon assimilation ($A$) and carboxylation rate ($v_\mathrm{c}$) against the Farquhar, von Caemmerer and Berry (FvCB) model. The FvCB model is calculated using the min-W approach as described by Lochoki and McGrath (2025) [[1]](https://doi.org/10.1101/2025.03.11.642611). To be able to simulate carbon assimilation, there are two mandatory parameters that need to be present in the model: CO2 concentration and Vc. If one of these parameters is missing, the FvCB model will still be shown, but no comparison with the model will be possible. Other parameters that are required to calculate the FvCB model will be added as parameters with default values if they are not present in the model. The table below summarizes which parameters were found in the model. The carbon assimilation shown does not represent actual values but rather a theoretical curve to compare the kinetic model to the popular FvCB model."
     )
 
     mdFile.new_header(level=3, title="Assumptions")
 
+    # List of assumptions made for FvCB comparison
     mdFile.new_list(
         [
             r"Infinite mesophyll conductance, therefore intercellular CO<sub>2</sub> partial pressure equals chloroplast partial pressure ($\mathrm{C_i} = \mathrm{C_c}$)",
@@ -975,6 +1155,7 @@ def create_report_summary(
         ]
     )
 
+    # Add FvCB comparison fig
     mdFile.new_line(
         f"{mdFile.new_inline_image(text='Assimilation', path=str(f'./{file_prepend}_fvcb_compare.svg'))}"
     )
@@ -984,10 +1165,12 @@ def create_report_summary(
     # PAM Fluorescence
     mdFile.new_header(level=2, title="PAM Fluorescence")
 
+    # Explanation of PAM simulation
     mdFile.new_paragraph(
         r"Simulation of a PAM flourescence protocol. The simulation is first run for 30 minutes in a dark adapted state (PPFD = 40) and then the PAM protocol starts. Each period consists of 2 minutes of light and then a saturating pulse of 0.8 seconds. The first two periods are in low light (PPFD = 40), followed by 10 periods in actinic light (PPFD = 1000) and then 10 periods in low light again (PPFD = 40). The left plot shows the normalised flourescence yield (orange) with the identified Fm peaks (crosses) and the calculated NPQ (blue). The right plot shows the quantum yields of non-regulated energy loss (Y(NO), red), regulated heat dissipation (Y(NPQ), orange) and photochemical energy conversion (Y(II), green), but only during the light phase. All results here are arbituary by using the proposed initial conditions of the model and using the Flourescence readout calculated through the model. Therefore, the values do not represent actual values but rather a qualitative behaviour of the model. The table below summarizes which parameters were found in the model."
     )
 
+    # Add Simulation fig
     mdFile.new_line(
         f"{mdFile.new_inline_image(text='PAM Protocol', path=str(f'./{file_prepend}_pam.svg'))}"
     )
@@ -995,6 +1178,7 @@ def create_report_summary(
     # Day Simulation
     mdFile.new_header(level=2, title="Day Simulation")
 
+    # Add to markdown file
     mdFile.create_md_file()
 
     return
