@@ -11,12 +11,11 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
 from mdutils.mdutils import MdUtils
 from mxlpy import Model, Simulator, make_protocol, mca, plot, scan, units
-from numpy.typing import ArrayLike
 from scipy.signal import find_peaks, peak_prominences
 from sympy import Integer, Pow
 from sympy.physics.units import Unit, bar
 from sympy.printing.latex import LatexPrinter
-from tqdm import tqdm
+import os
 
 
 # Custom Latex Printer to handle units with negative integer exponents properly (Still need to be improved for more complex cases)
@@ -946,6 +945,35 @@ def create_mca_fig(
     return fig, ax
 
 
+def save_matplotlib_figure(fig: plt.Figure, file_prepend: str, figcat: str) -> None:
+    """Save matplotlib figure of model validation fig in 'Figures' directory as a svg.
+
+    Args:
+        fig (plt.Figure): Matplotlib figure to save
+        file_prepend (str): str of file prepend for each fig. Recommended to be the model name.
+        figcat (str): str of figure category. Recommended to be a descriptive name for the figure.
+    """
+
+    try:
+        notebook_dir = Path(os.getcwd())
+    except NameError:
+        notebook_dir = Path('.')
+
+    # 2. Construct the path for the 'Figure' directory
+    figure_dir = notebook_dir / 'Figures'
+    
+    # 3. Create the directory if it doesn't exist
+    # `mkdir(exist_ok=True)` prevents an error if the directory already exists.
+    figure_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 4. Construct the full save path
+    save_path = figure_dir / f"{file_prepend}_{figcat}.svg"
+    
+    # 5. Save the figure
+    fig.savefig(save_path, bbox_inches='tight')
+    plt.close(fig) # Close the figure to free up memory
+
+
 def create_save_figs(
     model: Model,
     pfd: str,
@@ -1005,17 +1033,17 @@ def create_save_figs(
         r_light=r_light,
         A=A,
     )
-    plot.savefig(Path(__file__).parent / f"{file_prepend}_fvcb_compare.svg", dpi=300)
+    save_matplotlib_figure(plot, file_prepend, "fvcb_compare")
 
     # PAM simulation
     pam_plot, ax = create_pam_fig(model=model, pfd=pfd, flourescence=flourescence)
-    plt.savefig(Path(__file__).parent / f"{file_prepend}_pam.svg", dpi=300)
+    save_matplotlib_figure(pam_plot, file_prepend, "pam")
 
     # Day simulation
     plot, ax = create_day_simulation_fig(
         model=model, pfd=pfd, vc=vc, atp=atp, nadph=nadph, flourescence=flourescence
     )
-    plot.savefig(Path(__file__).parent / f"{file_prepend}_day_simulation.svg", dpi=300)
+    save_matplotlib_figure(plot, file_prepend, "day_simulation")
 
     # MCA of photosynthesis control coefficients
     plot, ax = create_mca_fig(
@@ -1157,7 +1185,7 @@ def create_report_summary(
 
     # Add FvCB comparison fig
     mdFile.new_line(
-        f"{mdFile.new_inline_image(text='Assimilation', path=str(f'./{file_prepend}_fvcb_compare.svg'))}"
+        f"{mdFile.new_inline_image(text='Assimilation', path=str(f'./Figures/{file_prepend}_fvcb_compare.svg'))}"
     )
 
     mdFile.new_table(columns=2, rows=8, text=table)
@@ -1172,7 +1200,7 @@ def create_report_summary(
 
     # Add Simulation fig
     mdFile.new_line(
-        f"{mdFile.new_inline_image(text='PAM Protocol', path=str(f'./{file_prepend}_pam.svg'))}"
+        f"{mdFile.new_inline_image(text='PAM Protocol', path=str(f'./Figures/{file_prepend}_pam.svg'))}"
     )
 
     # Day Simulation
